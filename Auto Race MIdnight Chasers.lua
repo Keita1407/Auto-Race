@@ -1,4 +1,3 @@
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
@@ -128,38 +127,93 @@ local function getCar()
     return nil
 end
 
--- Tự động quét tìm checkpoint trong Workspace
+-- Tự động quét tìm checkpoint trong Workspace (Đã sửa lỗi)
 local function getRaceCheckpoints()
     local checkpoints = {}
     
-    -- 1. Chỉ định các thư mục chứa cuộc đua phổ biến của game để quét trực tiếp (tránh gây lag)
-    local targetFolders = {
-        workspace:FindFirstChild("Races"),
+    -- Các thư mục có độ ưu tiên cao nhất (thường chỉ chứa cuộc đua hiện tại)
+    local highPriority = {
         workspace:FindFirstChild("CurrentRace"),
         workspace:FindFirstChild("ActiveRace"),
-        workspace:FindFirstChild("RaceGates"),
-        workspace:FindFirstChild("Map")
+        workspace:FindFirstChild("RaceGates")
     }
     
-    -- Quét nhanh trong các thư mục mục tiêu trước
-    for _, folder in pairs(targetFolders) do
-        if folder then
-            for _, child in pairs(folder:GetDescendants()) do
+    local activeFolder = nil
+    
+    -- Kiểm tra xem có thư mục ưu tiên nào đang hoạt động không
+    for _, folder in pairs(highPriority) do
+        if folder and #folder:GetChildren() > 0 then
+            activeFolder = folder
+            break
+        end
+    end
+    
+    -- Nếu không có, tìm trong workspace.Races hoặc workspace.Map
+    if not activeFolder then
+        local racesFolder = workspace:FindFirstChild("Races") or workspace:FindFirstChild("Map")
+        if racesFolder then
+            -- Chọn thư mục con có checkpoint gần xe của người chơi nhất
+            local car = getCar()
+            local playerPos = car and car.PrimaryPart and car.PrimaryPart.Position
+            
+            if playerPos then
+                local closestFolder = nil
+                local minDistance = math.huge
+                
+                for _, subFolder in pairs(racesFolder:GetChildren()) do
+                    if subFolder:IsA("Folder") or subFolder:IsA("Model") then
+                        -- Quét thử xem folder này có checkpoint nào gần người chơi không
+                        for _, child in pairs(subFolder:GetDescendants()) do
+                            if child:IsA("BasePart") then
+                                local nameLower = string.lower(child.Name)
+                                if string.find(nameLower, "checkpoint") or 
+                                   string.find(nameLower, "gate") or 
+                                   string.find(nameLower, "ring") or 
+                                   nameLower == "cp" or 
+                                   string.match(nameLower, "^cp%d+") then
+                                    local dist = (child.Position - playerPos).Magnitude
+                                    if dist < minDistance then
+                                        minDistance = dist
+                                        closestFolder = subFolder
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                -- Nếu tìm thấy thư mục đua gần nhất trong phạm vi hợp lý (< 1000 studs)
+                if closestFolder and minDistance < 1000 then
+                    activeFolder = closestFolder
+                end
+            end
+            
+            -- Nếu vẫn không tìm được folder cụ thể, dùng tạm cả racesFolder
+            if not activeFolder then
+                activeFolder = racesFolder
+            end
+        end
+    end
+    
+    -- Tiến hành quét checkpoints từ activeFolder đã xác định
+    if activeFolder then
+        for _, child in pairs(activeFolder:GetDescendants()) do
+            if child:IsA("BasePart") then
                 local nameLower = string.lower(child.Name)
-                if child:IsA("BasePart") and (
-                    string.find(nameLower, "gate") or 
-                    string.find(nameLower, "checkpoint") or 
-                    string.find(nameLower, "cp") or 
-                    string.find(nameLower, "ring") or
-                    string.find(nameLower, "waypoint")
-                ) then
+                -- Lọc tên chính xác hơn để tránh nhận nhầm các Part hệ thống khác
+                if string.find(nameLower, "checkpoint") or 
+                   string.find(nameLower, "gate") or 
+                   string.find(nameLower, "ring") or 
+                   string.find(nameLower, "waypoint") or
+                   nameLower == "cp" or 
+                   string.match(nameLower, "^cp%d+") then
                     table.insert(checkpoints, child)
                 end
             end
         end
     end
     
-    -- 2. Phương án dự phòng: Nếu không thấy, chỉ quét các thư mục cấp 1 ngoài Workspace có tên liên quan đến Race/Gate
+    -- Phương án dự phòng cuối cùng: quét toàn bộ workspace nếu vẫn trống
     if #checkpoints == 0 then
         for _, child in pairs(workspace:GetChildren()) do
             if child:IsA("Folder") or child:IsA("Model") then
@@ -180,6 +234,14 @@ local function getRaceCheckpoints()
         table.sort(checkpoints, function(a, b)
             local numA = tonumber(string.match(a.Name, "%d+")) or 0
             local numB = tonumber(string.match(b.Name, "%d+")) or 0
+            if numA == numB then
+                -- Nếu trùng số hoặc không có số, sắp xếp theo khoảng cách gần xe hơn để tránh đi lùi
+                local car = getCar()
+                if car and car.PrimaryPart then
+                    local pos = car.PrimaryPart.Position
+                    return (a.Position - pos).Magnitude < (b.Position - pos).Magnitude
+                end
+            end
             return numA < numB
         end)
     end
@@ -193,11 +255,13 @@ local function stabilizeCar(car)
     carStabilizationConnection = RunService.Heartbeat:Connect(function()
         if not autoRaceActive or not car.Parent or not car.PrimaryPart then
             if carStabilizationConnection then 
-                carStabilizationConnection:Disconnect(); carStabilizationConnection = nil 
+                carStabilizationConnection:Disconnect()
+                carStabilizationConnection = nil 
             end
             return
         end
-        local cf = car.PrimaryPart.CFrame; local pos, look = cf.Position, cf.LookVector
+        local cf = car.PrimaryPart.CFrame
+        local pos, look = cf.Position, cf.LookVector
         car.PrimaryPart.CFrame = car.PrimaryPart.CFrame:Lerp(CFrame.new(pos, pos + Vector3.new(look.X, 0, look.Z)), 0.15)
         car.PrimaryPart.AssemblyAngularVelocity = Vector3.new(0, car.PrimaryPart.AssemblyAngularVelocity.Y * 0.5, 0)
     end)
@@ -225,7 +289,7 @@ local function smoothNavigateToCar(car, targetPos, maxSpeed)
         local floorY = -30
         local resetY = -17
         if currentPos.Y < floorY then 
-            car.PrimaryPart.CFrame = CFrame.new(currentPos.X, resetY, currentPos.Z) 
+            car.PrimaryPart.CFrame = CFrame.new(currentPos.X, resetY, currentPos.Z)
         end
         task.wait()
     end
@@ -285,7 +349,8 @@ local function startAutoRace()
                         toggleBtn.BackgroundColor3 = Color3.fromRGB(42, 42, 46)
                         toggleStroke.Color = Color3.fromRGB(220, 55, 55)
                         if carStabilizationConnection then 
-                            carStabilizationConnection:Disconnect(); carStabilizationConnection = nil 
+                            carStabilizationConnection:Disconnect()
+                            carStabilizationConnection = nil 
                         end
                     end
                 else
@@ -308,7 +373,6 @@ toggleBtn.MouseButton1Click:Connect(function()
         statusText.TextColor3 = Color3.fromRGB(255, 130, 130)
         return
     end
-
     autoRaceActive = not autoRaceActive
     if autoRaceActive then
         toggleBtn.Text = "Auto Race: ON"
@@ -324,7 +388,9 @@ toggleBtn.MouseButton1Click:Connect(function()
         statusText.Text = "Status: Ready (Manual Control)"
         statusText.TextColor3 = Color3.fromRGB(135, 135, 135)
         if carStabilizationConnection then 
-            carStabilizationConnection:Disconnect(); carStabilizationConnection = nil 
+            carStabilizationConnection:Disconnect()
+            carStabilizationConnection = nil 
+            carStabilizationConnection = nil 
         end
     end
 end)
@@ -351,7 +417,8 @@ guiFrame.InputBegan:Connect(function(input)
             if input.UserInputState == Enum.UserInputState.End then 
                 dragging = false 
                 if dragConnection then 
-                    dragConnection:Disconnect(); dragConnection = nil 
+                    dragConnection:Disconnect()
+                    dragConnection = nil 
                 end
             end 
         end)
