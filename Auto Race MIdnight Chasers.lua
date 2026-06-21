@@ -130,46 +130,60 @@ end
 
 -- Tự động quét tìm checkpoint trong Workspace
 local function getRaceCheckpoints()
-    local checkpointFolder = nil
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Folder") or v:IsA("Model") then
-            local nameLower = string.lower(v.Name)
-            if string.find(nameLower, "checkpoint") or string.find(nameLower, "waypoint") then
-                local children = v:GetChildren()
-                if #children > 0 then
-                    checkpointFolder = v
-                    break
+    local checkpoints = {}
+    
+    -- 1. Chỉ định các thư mục chứa cuộc đua phổ biến của game để quét trực tiếp (tránh gây lag)
+    local targetFolders = {
+        workspace:FindFirstChild("Races"),
+        workspace:FindFirstChild("CurrentRace"),
+        workspace:FindFirstChild("ActiveRace"),
+        workspace:FindFirstChild("RaceGates"),
+        workspace:FindFirstChild("Map")
+    }
+    
+    -- Quét nhanh trong các thư mục mục tiêu trước
+    for _, folder in pairs(targetFolders) do
+        if folder then
+            for _, child in pairs(folder:GetDescendants()) do
+                local nameLower = string.lower(child.Name)
+                if child:IsA("BasePart") and (
+                    string.find(nameLower, "gate") or 
+                    string.find(nameLower, "checkpoint") or 
+                    string.find(nameLower, "cp") or 
+                    string.find(nameLower, "ring") or
+                    string.find(nameLower, "waypoint")
+                ) then
+                    table.insert(checkpoints, child)
                 end
             end
         end
     end
     
-    if checkpointFolder then
-        local checkpoints = {}
-        for _, child in pairs(checkpointFolder:GetChildren()) do
-            if child:IsA("BasePart") or child:IsA("Model") then
-                table.insert(checkpoints, child)
+    -- 2. Phương án dự phòng: Nếu không thấy, chỉ quét các thư mục cấp 1 ngoài Workspace có tên liên quan đến Race/Gate
+    if #checkpoints == 0 then
+        for _, child in pairs(workspace:GetChildren()) do
+            if child:IsA("Folder") or child:IsA("Model") then
+                local nameLower = string.lower(child.Name)
+                if string.find(nameLower, "race") or string.find(nameLower, "checkpoint") or string.find(nameLower, "gate") then
+                    for _, subChild in pairs(child:GetDescendants()) do
+                        if subChild:IsA("BasePart") then
+                            table.insert(checkpoints, subChild)
+                        end
+                    end
+                end
             end
         end
+    end
+    
+    -- Sắp xếp các checkpoint theo thứ tự số tăng dần xuất hiện trong tên (ví dụ: Gate1, Gate2, CP1...)
+    if #checkpoints > 0 then
         table.sort(checkpoints, function(a, b)
             local numA = tonumber(string.match(a.Name, "%d+")) or 0
             local numB = tonumber(string.match(b.Name, "%d+")) or 0
             return numA < numB
         end)
-        return checkpoints
     end
     
-    local checkpoints = {}
-    for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and (string.find(string.lower(v.Name), "checkpoint") or string.find(string.lower(v.Name), "waypoint")) then
-            table.insert(checkpoints, v)
-        end
-    end
-    table.sort(checkpoints, function(a, b)
-        local numA = tonumber(string.match(a.Name, "%d+")) or 0
-        local numB = tonumber(string.match(b.Name, "%d+")) or 0
-        return numA < numB
-    end)
     return checkpoints
 end
 
